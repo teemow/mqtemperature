@@ -36,6 +36,8 @@ var (
 
 	projectVersion string
 	projectBuild   string
+
+	isMQTTconnected = false
 )
 
 func init() {
@@ -61,6 +63,10 @@ func assert(err error) {
 
 func watchTemperature(client *mqtt.Client, device *onewire.DS18S20) {
 	for {
+		if !isMQTTconnected {
+			reconnect(client)
+		}
+
 		value, err := device.Read()
 		if err == nil {
 			topic := fmt.Sprintf("mqtemperature/%s", mainFlags.Topic)
@@ -76,14 +82,35 @@ func watchTemperature(client *mqtt.Client, device *onewire.DS18S20) {
 	}
 }
 
+func onMQTTConnectionLost(client *mqtt.Client, err error) {
+	if isMQTTconnected {
+		log.Println("MQTT connection lost: ", err)
+		isMQTTconnected = false
+	}
+}
+
+func reconnect(client *mqtt.Client) {
+	if !isMQTTconnected {
+		if token := client.Connect(); token.Wait() && token.Error() != nil {
+			log.Println(token.Error())
+		} else {
+			log.Println("MQTT reconnected")
+			isMQTTconnected = true
+		}
+	}
+}
+
 func mainRun(cmd *cobra.Command, args []string) {
 	// mqtt
 	opts := mqtt.NewClientOptions().AddBroker(fmt.Sprintf("tcp://%s:%d", mainFlags.Host, mainFlags.Port))
 	opts.SetClientID(fmt.Sprintf("mqtemperature-%s", mainFlags.Topic))
+	opts.SetConnectionLostHandler(onMQTTConnectionLost)
 
 	client := mqtt.NewClient(opts)
 	if token := client.Connect(); token.Wait() && token.Error() != nil {
 		log.Println(token.Error())
+	} else {
+		isMQTTconnected = true
 	}
 
 	device, err := onewire.NewDS18S20(mainFlags.Device)
@@ -103,6 +130,7 @@ func mainRun(cmd *cobra.Command, args []string) {
 
 func main() {
 	mainCmd.AddCommand(versionCmd)
+	mainCmd.AddCommand(diffCmd)
 
 	mainCmd.Execute()
 }
